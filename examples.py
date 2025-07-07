@@ -227,3 +227,157 @@ def exponential_sum(x, hessian_needed=False):
         h = None
 
     return f, g, h
+
+
+
+#HW 2 ---------------------------------------------------------------------
+def qp_problem():
+    """Minimise  x₁² + x₂² + (x₃+1)²  """
+    def f(x):
+        x = np.asarray(x, dtype=float)
+        if x.size == 3:
+            x1, x2, x3 = x
+        elif x.size == 2:
+            x1, x2 = x
+            x3 = 1.0 - x1 - x2
+        else:
+            raise ValueError("Wrong dimentions")
+        return x1**2 + x2**2 + (x3 + 1.0)**2
+
+
+
+    def grad(x):
+        x = np.asarray(x, dtype=float)
+        if x.size == 3:
+            return np.array([2*x[0], 2*x[1], 2*(x[2] + 1)])
+        elif x.size == 2:
+            u, v = x
+            w = 1.0 - u - v
+
+            dfdu = 2*u - 2*(w + 1)
+            dfdv = 2*v - 2*(w + 1)
+
+            return np.array([dfdu, dfdv])
+
+    def hess(x):
+        x = np.asarray(x, dtype=float)
+        if x.size == 3:
+            return np.diag([2.0, 2.0, 2.0])             # constant :)
+        elif x.size == 2:
+            # 2×2 Hessian on the (u,v) plane
+            return np.array([[4.0, 2.0],
+                             [2.0, 4.0]])
+
+    # attach derivatives
+    f.grad, f.hess = grad, hess
+
+    # constrains
+    g_list: List = []
+    for i in range(3):
+        g_list.append(lambda x, i=i: -x[i])
+        g_list[-1].grad = lambda x, i=i: -np.eye(3)[i]
+        g_list[-1].hess = lambda x: np.zeros((3, 3))
+
+    A = np.ones((1, 3))
+    b = np.array([1.0])
+
+    x0  = np.array([0.1, 0.2, 0.7])
+    sol = np.array([0.5, 0.5, 0.0])
+
+    return f, g_list, A, b, x0, sol
+
+
+
+def lp_problem():
+    """Maximise  x + y ."""
+    def f(x): return -(x[0]+  x[1])      # minimise the negative – turns into LP
+    f.grad = lambda x: np.array([-1.0, -1.0])
+    f.hess = lambda x: np.zeros((2, 2))
+
+    g_list: List = []
+    g_list.append(lambda x: -x[1] - x[0] + 1.0)
+    g_list[-1].grad = lambda x: np.array([-1.0, -1.0])
+    g_list[-1].hess = lambda x: np.zeros((2, 2))
+    # y ≤ 1 -> y - 1 ≤ 0
+    g_list.append(lambda x: x[1] - 1.0)
+    g_list[-1].grad = lambda x: np.array([0.0, 1.0])
+    g_list[-1].hess = lambda x: np.zeros((2, 2))
+    # x ≤ 2-> x - 2 ≤ 0
+    g_list.append(lambda x: x[0] - 2.0)
+    g_list[-1].grad = lambda x: np.array([1.0, 0.0])
+    g_list[-1].hess = lambda x: np.zeros((2, 2))
+    # y ≥ 0  -> -y ≤ 0
+    g_list.append(lambda x: -x[1])
+    g_list[-1].grad = lambda x: np.array([0.0, -1.0])
+    g_list[-1].hess = lambda x: np.zeros((2, 2))
+
+    x0 = np.array([0.5, 0.75])        # interior start
+    sol = np.array([2.0, 1.0])
+    return f, g_list, None, None, x0, sol
+
+################################################################
+####PLOTTING :) #####
+
+if __name__ == "__main__":
+    import os, sys
+    import matplotlib.pyplot as plt
+    from typing import List
+    from src.constrained_min import interior_pt
+    from src import utils            # same helper as HW-01
+    np.set_printoptions(precision=8, suppress=True)
+    os.makedirs("plots", exist_ok=True)
+
+    def run_demo(name: str,
+                 f, g_list: List,
+                 A, b,
+                 x0: np.ndarray,
+                 xlims, ylims):
+        x_star, hist = interior_pt(f, g_list, A, b, x0)
+
+        def wrapper(z, need_hess=False):
+            """utils.plot_contours_with_path expects f, grad, hess."""
+            return f(z), f.grad(z), f.hess(z)
+
+        fig_path = utils.plot_contours_with_path(
+            wrapper,
+            xlim=xlims, ylim=ylims,
+            title=f"{name}: central path (outer iters)",
+            paths=[hist["centers"]],
+            method_names=["central path"],
+            levels=25,
+        )
+        ax = fig_path.axes[0]
+        ax.plot(*x_star[:2] if x_star.size == 2 else x_star[:2], "r*", ms=10, label="final")
+        ax.legend()
+        utils.save_plot(fig_path, f"plots/{name.lower().replace(' ', '_')}_path.png")
+
+        fig_obj = utils.plot_function_values(
+            [list(range(len(hist["f"])))],
+            [hist["f"]],
+            ["outer iterations"],
+            f"{name}: objective vs outer iteration"
+        )
+        utils.save_plot(fig_obj, f"plots/{name.lower().replace(' ', '_')}_obj.png")
+
+        feas_resid = (
+            max([g(x_star) for g in g_list]) if g_list else 0.0,
+            np.max(np.abs(A @ x_star - b)) if A is not None else 0.0
+        )
+        print(f"\n{name} – final candidate")
+        print(f"  x* = {x_star}")
+        print(f"  objective = {f(x_star):.12g}")
+        print(f"  max inequality residual  = {feas_resid[0]:.3e}")
+        print(f"  max equality residual    = {feas_resid[1]:.3e}")
+
+    print("\n=== Quadratic programme on simplex ===")
+    f_qp, g_qp, A_qp, b_qp, x0_qp, _ = qp_problem()
+    run_demo("QP on simplex", f_qp, g_qp, A_qp, b_qp, x0_qp,
+             xlims=(-0.1, 1.1), ylims=(-0.1, 1.1))
+
+    print("\n=== Linear programme on polygon ===")
+    f_lp, g_lp, A_lp, b_lp, x0_lp, _ = lp_problem()
+    run_demo("LP on polygon", f_lp, g_lp, A_lp, b_lp, x0_lp,
+             xlims=(-0.2, 2.2), ylims=(-0.2, 1.2))
+
+    print("Done")
+    plt.show()
